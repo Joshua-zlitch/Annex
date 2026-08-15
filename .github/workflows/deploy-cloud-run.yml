@@ -1,0 +1,46 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GAR_LOCATION: ${{ vars.GAR_LOCATION }}
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  IMAGE: ${{ vars.GAR_LOCATION }}/${{ vars.GCP_PROJECT_ID }}/annex-api:latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        run: |-
+          gcloud builds submit --tag "$IMAGE" .
+
+      - name: Deploy to Cloud Run
+        run: |-
+          gcloud run deploy annex-api \
+            --image "$IMAGE" \
+            --region "${{ vars.GCP_REGION }}" \
+            --platform managed \
+            --allow-unauthenticated=false \
+            --memory 1Gi \
+            --cpu 1 \
+            --set-env-vars "ENVIRONMENT=production" \
+            --update-secrets "SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest,SUPABASE_SERVICE_ROLE_KEY=SUPABASE_SERVICE_ROLE_KEY:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest"

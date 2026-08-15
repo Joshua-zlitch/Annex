@@ -1,0 +1,14 @@
+services:
+  api:
+    build: .
+    image: annex-api:dev
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
+    # Mount for hot-reload during development (requires .env to be present).
+    volumes:
+      - ./app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
