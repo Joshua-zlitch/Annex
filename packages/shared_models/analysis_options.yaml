@@ -1,1 +1,2 @@
-include: package:lints/recommended.yaml
+# Include the monorepo-wide analysis options
+include: ../../analysis_options.yaml

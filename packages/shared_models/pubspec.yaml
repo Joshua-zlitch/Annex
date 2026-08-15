@@ -10,5 +10,12 @@ environment:
   sdk: ^3.0.0
 
 dev_dependencies:
-  lints: ^6.0.0
-  test: ^1.25.0
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  dart_code_metrics: ^6.0.0
+
+# Contract testing: generate Dart models from OpenAPI spec
+# Run with: dart run openapi_generator:generate
+dependency_overrides:
+  openapi_generator: ^6.0.0

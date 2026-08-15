@@ -1,0 +1,12 @@
+# Terraform variables for ANNEX infrastructure
+# Copy to terraform.tfvars and fill in values
+
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+environment = "staging"
+
+# Database password (for initial setup, then use Secret Manager)
+db_password = "your-secure-password"
+
+# Slack webhook for production alerts
+slack_webhook_url = "https://hooks.slack.com/services/XXX/XXX/XXX"

@@ -1,2 +1,2 @@
-# ANNEX shared_features package — Flutter lints (same set as shared_ui).
-include: package:flutter_lints/flutter.yaml
+# Include the monorepo-wide analysis options
+include: ../../analysis_options.yaml

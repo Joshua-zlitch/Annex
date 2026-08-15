@@ -101,6 +101,17 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:3000", "http://localhost:8080"]
     )
 
+    # Observability (Phase 4): Sentry, OpenTelemetry, Prometheus.
+    sentry_dsn: str | None = None
+    sentry_traces_sample_rate: float = 0.1
+    sentry_profiles_sample_rate: float = 0.1
+
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_exporter_otlp_insecure: bool = False
+
+    # Prometheus metrics endpoint (enabled by default in non-prod)
+    metrics_enabled: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

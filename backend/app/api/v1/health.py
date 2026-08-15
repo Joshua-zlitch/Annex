@@ -5,6 +5,7 @@ readiness of configured dependencies. Both live outside the versioned
 prefix so orchestrators can probe them without API versioning.
 """
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -26,6 +27,7 @@ def health(settings: Settings = Depends(get_settings_dep)) -> dict[str, Any]:
             "service": settings.app_name,
             "version": settings.app_version,
             "environment": settings.app_env,
+            "timestamp": time.time(),
         }
     }
 
@@ -47,6 +49,13 @@ def readiness(request: Request) -> JSONResponse:
                 {"name": result.name, "ok": result.ok, "detail": result.detail}
                 for result in results
             ],
+            "timestamp": time.time(),
         }
     }
     return JSONResponse(status_code=200 if healthy else 503, content=payload)
+
+
+@router.get("/health/live")
+def liveness() -> dict[str, Any]:
+    """Kubernetes liveness probe — minimal response."""
+    return {"status": "alive", "timestamp": time.time()}

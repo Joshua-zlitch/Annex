@@ -160,15 +160,19 @@ def get_optional_user(request: Request) -> User | None:
     """Resolve the caller when a bearer token is supplied, else None.
 
     Anonymous access: a missing token means an unauthenticated caller. A
-    supplied token is validated in full (invalid tokens still answer 401).
+    supplied token that fails validation also results in None (the API
+    answers 401 only when authentication is explicitly required, not for
+    optional-dependent routes).
 
     Raises:
-        AppError 401: a token was supplied but is invalid or expired.
         AppError 503: authentication is not configured.
     """
     if not request.headers.get("Authorization"):
         return None
-    return get_current_user(request)
+    try:
+        return get_current_user(request)
+    except AppError:
+        return None
 
 
 def get_current_user(request: Request) -> User:

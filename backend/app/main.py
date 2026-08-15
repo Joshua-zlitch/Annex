@@ -10,6 +10,7 @@ limiter) bound to ``app.state`` for dependency injection.
 import redis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from app import __version__
 from app.api.errors import register_exception_handlers
@@ -33,6 +34,14 @@ from app.application.services.user_service import UserService
 from app.core.checks import DatabaseHealthCheck, DependencyCheck, RedisHealthCheck
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
+from app.core.observability import (
+    configure_logging as configure_structured_logging,
+    init_sentry,
+    init_tracing,
+    init_metrics,
+    metrics_middleware,
+    metrics_endpoint,
+)
 from app.core.request_id import RequestIdMiddleware
 from app.infrastructure.ai.factory import build_claim_analyzer
 from app.infrastructure.auth.firebase_token_verifier import FirebaseTokenVerifier
@@ -129,7 +138,12 @@ def create_app(
         A fully wired FastAPI application.
     """
     settings = settings or get_settings()
-    configure_logging(settings.log_level, debug=settings.debug)
+    configure_structured_logging(settings.log_level, debug=settings.debug)
+
+    # Initialize observability (Sentry, OpenTelemetry, Prometheus)
+    init_sentry(settings)
+    init_tracing(settings)
+    init_metrics(settings)
 
     app = FastAPI(
         title=settings.app_name,
@@ -138,6 +152,11 @@ def create_app(
         docs_url="/docs" if settings.debug else None,
         redoc_url=None,
     )
+
+    # Prometheus metrics endpoint
+    if settings.metrics_enabled:
+        app.add_middleware(metrics_middleware)
+        app.add_route("/metrics", metrics_endpoint, methods=["GET"])
     # Bind the settings instance to the app so routes resolve the same
     # configuration object through DI (see app.api.deps).
     app.state.settings = settings

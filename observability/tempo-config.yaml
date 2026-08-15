@@ -1,0 +1,50 @@
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+  max_block_bytes: 1_048_576
+  trace_idle_period: 10s
+
+compactor:
+  compaction:
+    block_retention: 1h
+    compacted_block_retention: 10m
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo
+    pool:
+      max_workers: 10
+      queue_depth: 10000
+
+querier:
+  frontend_workers: 2
+
+query_frontend:
+  search:
+    duration_slo: 5s
+    throughput_bytes_slo: 1.073741824e+09
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: annex-dev
+  storage:
+    path: /var/tempo/generator
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true

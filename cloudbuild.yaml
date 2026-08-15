@@ -1,0 +1,121 @@
+# Cloud Build configuration for automated builds
+# Used by Cloud Build triggers or manual invocation
+
+steps:
+  # Build backend image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:$SHORT_SHA',
+      '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:latest',
+      '-f', 'Dockerfile',
+      'Annex-Fbu/backend'
+    ]
+    id: 'build-backend'
+
+  # Build migration job image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend-migration:$SHORT_SHA',
+      '-f', 'Dockerfile.migration',
+      'Annex-Fbu/backend'
+    ]
+    id: 'build-migration'
+
+  # Build web image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/web:$SHORT_SHA',
+      '-f', 'Dockerfile',
+      'Annex-Fbu/apps/web'
+    ]
+    id: 'build-web'
+
+  # Push images
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:$SHORT_SHA']
+    waitFor: ['build-backend']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:latest']
+    waitFor: ['build-backend']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend-migration:$SHORT_SHA']
+    waitFor: ['build-migration']
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/web:$SHORT_SHA']
+    waitFor: ['build-web']
+
+  # Deploy to Cloud Run (staging)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'gcloud'
+    args: [
+      'run', 'deploy', 'annex-backend',
+      '--image', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:$SHORT_SHA',
+      '--region', '${_REGION}',
+      '--platform', 'managed',
+      '--port', '8000',
+      '--cpu', '2',
+      '--memory', '2Gi',
+      '--min-instances', '0',
+      '--max-instances', '10',
+      '--concurrency', '80',
+      '--timeout', '300',
+      '--set-env-vars', 'APP_ENV=staging,LOG_LEVEL=INFO',
+      '--set-secrets', 'DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,FIREBASE_PROJECT_ID=FIREBASE_PROJECT_ID:latest,FIREBASE_SERVICE_ACCOUNT_PATH=FIREBASE_SERVICE_ACCOUNT:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest,SENTRY_DSN=SENTRY_DSN:latest,OTEL_EXPORTER_OTLP_ENDPOINT=OTEL_EXPORTER_OTLP_ENDPOINT:latest',
+      '--service-account', '${_SERVICE_ACCOUNT}',
+      '--allow-unauthenticated'
+    ]
+    waitFor: ['push-backend']
+    id: 'deploy-backend-staging'
+
+  # Run migrations after deploy
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
+    entrypoint: 'gcloud'
+    args: [
+      'run', 'jobs', 'execute', 'annex-migration',
+      '--image', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend-migration:$SHORT_SHA',
+      '--region', '${_REGION}',
+      '--wait'
+    ]
+    waitFor: ['deploy-backend-staging']
+    id: 'run-migrations'
+
+  # Deploy web to Firebase (staging)
+  - name: 'gcr.io/firebase/firebase-tools:latest'
+    entrypoint: 'firebase'
+    args: [
+      'deploy',
+      '--only', 'hosting:annex-web-staging',
+      '--project', '${_FIREBASE_PROJECT_ID}',
+      '--token', '${_FIREBASE_TOKEN}'
+    ]
+    waitFor: ['build-web']
+    id: 'deploy-web-staging'
+    env:
+      - 'FIREBASE_TOKEN=${_FIREBASE_TOKEN}'
+
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:$SHORT_SHA'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend:latest'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/backend-migration:$SHORT_SHA'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/web:$SHORT_SHA'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  substitution_option: 'ALLOW_LOOSE'
+
+substitutions:
+  _REGION: 'us-central1'
+  _REPO: 'annex'
+  _SERVICE_ACCOUNT: '${PROJECT_NUMBER}-compute@developer.gserviceaccount.com'
+  _FIREBASE_PROJECT_ID: 'annex-staging'
+  _FIREBASE_TOKEN: ''
+
+tags:
+  - 'annex'
+  - 'ci-cd'

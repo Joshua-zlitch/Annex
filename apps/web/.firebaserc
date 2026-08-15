@@ -1,5 +1,23 @@
 {
   "projects": {
-    "default": "<firebase-project-id>"
+    "default": "annex-prod",
+    "staging": "annex-staging",
+    "production": "annex-prod"
+  },
+  "targets": {
+    "annex-staging": {
+      "hosting": {
+        "annex-web": [
+          "annex-web-staging"
+        ]
+      }
+    },
+    "annex-prod": {
+      "hosting": {
+        "annex-web": [
+          "annex-web-prod"
+        ]
+      }
+    }
   }
 }

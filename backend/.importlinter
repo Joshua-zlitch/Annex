@@ -1,0 +1,79 @@
+[importlinter]
+root_package = app
+
+[contracts]
+layers = layers
+type = layers
+layers = api, application, domain, infrastructure
+respect_imports = true
+
+[contracts]
+no_external_in_domain = layers
+type = forbidden
+source = app.domain
+forbidden = [
+    "app.api",
+    "app.application",
+    "app.infrastructure",
+    "fastapi",
+    "pydantic",
+    "sqlalchemy",
+    "psycopg",
+    "redis",
+    "celery",
+    "firebase_admin",
+    "openai",
+    "google",
+    "cv2",
+    "pytesseract",
+]
+
+[contracts]
+no_infrastructure_in_application = layers
+type = forbidden
+source = app.application
+forbidden = [
+    "app.infrastructure",
+    "psycopg",
+    "sqlalchemy",
+    "redis",
+    "celery",
+    "firebase_admin",
+    "openai",
+    "google.genai",
+    "cv2",
+    "pytesseract",
+]
+
+[contracts]
+no_api_in_application = layers
+type = forbidden
+source = app.application
+forbidden = [
+    "app.api",
+    "fastapi",
+]
+
+[contracts]
+domain_only_imports_domain = layers
+type = layers
+layers = domain
+respect_imports = true
+
+[contracts]
+application_imports_domain = layers
+type = layers
+layers = application, domain
+respect_imports = true
+
+[contracts]
+infrastructure_imports_application_and_domain = layers
+type = layers
+layers = infrastructure, application, domain
+respect_imports = true
+
+[contracts]
+api_imports_application_and_domain = layers
+type = layers
+layers = api, application, domain
+respect_imports = true

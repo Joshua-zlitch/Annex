@@ -14,7 +14,7 @@
     ],
     "headers": [
       {
-        "source": "**/*.@(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|otf)",
+        "source": "**/*.@(js|css|wasm)",
         "headers": [
           {
             "key": "Cache-Control",
@@ -23,11 +23,24 @@
         ]
       },
       {
-        "source": "flutter_service_worker.js",
+        "source": "**/*.@(png|jpg|jpeg|gif|svg|ico|webp)",
         "headers": [
           {
             "key": "Cache-Control",
-            "value": "no-cache"
+            "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        "source": "service-worker.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          },
+          {
+            "key": "Service-Worker-Allowed",
+            "value": "/"
           }
         ]
       },
@@ -35,11 +48,33 @@
         "source": "**",
         "headers": [
           {
-            "key": "Cache-Control",
-            "value": "no-cache"
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "X-XSS-Protection",
+            "value": "1; mode=block"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "key": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
           }
         ]
       }
-    ]
+    ],
+    "trailingSlash": false
+  },
+  "emulators": {
+    "hosting": {
+      "port": 5000
+    }
   }
 }

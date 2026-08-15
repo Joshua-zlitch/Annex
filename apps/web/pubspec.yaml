@@ -28,6 +28,8 @@ dependencies:
   # State + platform init.
   provider: ^6.1.0
   firebase_core: ^4.0.0
+  # Observability
+  sentry_flutter: ^8.0.0
   # Material adaptive icons reference the Cupertino icon font (keeps the
   # web build warning-free when icon tree-shaking is on).
   cupertino_icons: ^1.0.8
@@ -36,6 +38,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  dart_code_metrics: ^6.0.0
 
 flutter:
   uses-material-design: true

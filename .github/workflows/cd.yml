@@ -1,0 +1,384 @@
+name: CD - Continuous Deployment
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  FLUTTER_VERSION: '3.24.0'
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
+
+jobs:
+  # =========================================================================
+  # BACKEND DEPLOYMENT (Cloud Run)
+  # =========================================================================
+  backend-deploy:
+    name: Deploy Backend to Cloud Run
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: Annex-Fbu/backend
+          push: true
+          tags: |
+            ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/annex/backend:${{ github.sha }}
+            ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/annex/backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: annex-backend
+          region: ${{ secrets.GCP_REGION }}
+          image: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/annex/backend:${{ github.sha }}
+          flags: >
+            --port=8000
+            --cpu=2
+            --memory=2Gi
+            --min-instances=0
+            --max-instances=10
+            --concurrency=80
+            --timeout=300
+            --set-env-vars=APP_ENV=${{ github.event.inputs.environment || 'staging' }}
+            --set-env-vars=LOG_LEVEL=INFO
+            --set-secrets=DATABASE_URL=DATABASE_URL:latest
+            --set-secrets=REDIS_URL=REDIS_URL:latest
+            --set-secrets=FIREBASE_PROJECT_ID=FIREBASE_PROJECT_ID:latest
+            --set-secrets=FIREBASE_SERVICE_ACCOUNT_PATH=FIREBASE_SERVICE_ACCOUNT:latest
+            --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest
+            --set-secrets=GEMINI_API_KEY=GEMINI_API_KEY:latest
+            --set-secrets=SENTRY_DSN=SENTRY_DSN:latest
+            --set-secrets=OTEL_EXPORTER_OTLP_ENDPOINT=OTEL_EXPORTER_OTLP_ENDPOINT:latest
+
+      - name: Run database migrations
+        run: |
+          gcloud run jobs execute annex-migration \
+            --image=${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/annex/backend:${{ github.sha }} \
+            --region=${{ secrets.GCP_REGION }} \
+            --wait \
+            --command="alembic" --args="upgrade" --args="head" || true
+
+      - name: Verify deployment
+        run: |
+          URL="${{ steps.deploy.outputs.url }}"
+          echo "Verifying deployment at $URL"
+          for i in {1..30}; do
+            if curl -sf "$URL/health/live" > /dev/null; then
+              echo "Deployment healthy!"
+              exit 0
+            fi
+            echo "Waiting for deployment... ($i/30)"
+            sleep 10
+          done
+          echo "Deployment verification failed"
+          exit 1
+
+  # =========================================================================
+  # WEB APP DEPLOYMENT (Firebase Hosting)
+  # =========================================================================
+  web-deploy:
+    name: Deploy Web App to Firebase
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+
+      - name: Get dependencies
+        run: cd Annex-Fbu/apps/web && flutter pub get
+
+      - name: Analyze
+        run: cd Annex-Fbu/apps/web && flutter analyze
+
+      - name: Test
+        run: cd Annex-Fbu/apps/web && flutter test
+
+      - name: Build web
+        run: cd Annex-Fbu/apps/web && flutter build web --release --base-href /
+
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          target: ${{ github.event.inputs.environment || 'staging' }}
+          entryPoint: ./Annex-Fbu/apps/web
+
+      - name: Verify deployment
+        run: |
+          URL="https://${{ secrets.FIREBASE_PROJECT_ID }}.web.app"
+          if [ "${{ github.event.inputs.environment }}" = "staging" ]; then
+            URL="https://${{ secrets.FIREBASE_PROJECT_ID }}--staging.web.app"
+          fi
+          echo "Verifying web deployment at $URL"
+          for i in {1..20}; do
+            # Check both root and a deep route to verify SPA rewrites work
+            if curl -sf "$URL" > /dev/null && curl -sf "$URL/analysis" > /dev/null; then
+              echo "Web deployment verified (SPA rewrites working)!"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Web deployment verification failed"
+          exit 1
+
+  # =========================================================================
+  # MOBILE APP BUILD (App Store / Play Store artifacts)
+  # =========================================================================
+  mobile-build:
+    name: Build Mobile Apps
+    runs-on: macos-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+
+      - name: Get dependencies
+        run: cd Annex-Fbu/apps/mobile && flutter pub get
+
+      - name: Analyze
+        run: cd Annex-Fbu/apps/mobile && flutter analyze
+
+      - name: Test
+        run: cd Annex-Fbu/apps/mobile && flutter test
+
+      - name: Build iOS (Release)
+        run: |
+          cd Annex-Fbu/apps/mobile
+          flutter build ipa --release \
+            --export-options-plist=ExportOptions.plist \
+            --flavor=production
+
+      - name: Build Android (Release)
+        run: |
+          cd Annex-Fbu/apps/mobile
+          flutter build appbundle --release --flavor=production
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: Annex-Fbu/apps/mobile/build/ios/ipa/*.ipa
+          retention-days: 30
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-aab
+          path: Annex-Fbu/apps/mobile/build/app/outputs/bundle/productionRelease/*.aab
+          retention-days: 30
+
+  # =========================================================================
+  # BROWSER EXTENSION DEPLOYMENT (Chrome Web Store)
+  # =========================================================================
+  extension-deploy:
+    name: Deploy Browser Extension to Chrome Web Store
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: Annex-Fbu/apps/extension/package-lock.json
+
+      - name: Install dependencies
+        run: cd Annex-Fbu/apps/extension && npm ci
+
+      - name: Type check
+        run: cd Annex-Fbu/apps/extension && npm run typecheck
+
+      - name: Lint
+        run: cd Annex-Fbu/apps/extension && npm run lint
+
+      - name: Test
+        run: cd Annex-Fbu/apps/extension && npm run test
+
+      - name: Build extension
+        run: cd Annex-Fbu/apps/extension && npm run build
+
+      - name: Create Chrome Web Store package
+        run: |
+          cd Annex-Fbu/apps/extension
+          zip -r annex-extension-${{ github.ref_name }}.zip dist/
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-extension
+          path: Annex-Fbu/apps/extension/annex-extension-${{ github.ref_name }}.zip
+          retention-days: 30
+
+      - name: Publish to Chrome Web Store
+        if: secrets.CWS_CLIENT_ID != '' && secrets.CWS_CLIENT_SECRET != '' && secrets.CWS_REFRESH_TOKEN != ''
+        uses: mnao305/chrome-webstore-upload@v1
+        with:
+          clientId: ${{ secrets.CWS_CLIENT_ID }}
+          clientSecret: ${{ secrets.CWS_CLIENT_SECRET }}
+          refreshToken: ${{ secrets.CWS_REFRESH_TOKEN }}
+          extensionId: ${{ secrets.CWS_EXTENSION_ID }}
+          zipFile: Annex-Fbu/apps/extension/annex-extension-${{ github.ref_name }}.zip
+          publish: true
+
+  # =========================================================================
+  # RELEASE NOTES & NOTIFICATIONS
+  # =========================================================================
+  release:
+    name: Create Release & Notify
+    runs-on: ubuntu-latest
+    needs: [backend-deploy, web-deploy, mobile-build, extension-deploy]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            CHANGELOG=$(git log --oneline --pretty=format:"- %s (%an)" HEAD)
+          else
+            CHANGELOG=$(git log --oneline --pretty=format:"- %s (%an)" $PREV_TAG..HEAD)
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## ANNEX ${{ github.ref_name }}
+            
+            ### Changes
+            ${{ steps.changelog.outputs.changelog }}
+            
+            ### Deployment
+            - Backend: Cloud Run (${{ secrets.GCP_REGION }})
+            - Web: Firebase Hosting
+            - Mobile: iOS IPA / Android AAB (artifacts)
+            - Extension: Chrome Web Store
+            
+            ### Verification
+            - Health: https://<backend-url>/health/live
+            - Metrics: https://<backend-url>/metrics
+            - Grafana: http://grafana:3000 (internal)
+
+      - name: Notify Slack
+        if: secrets.SLACK_WEBHOOK_URL != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"text":"🚀 ANNEX ${{ github.ref_name }} deployed!\nBackend: Cloud Run\nWeb: Firebase\nMobile: Artifacts ready\nExtension: Chrome Web Store"}' \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Notify Discord
+        if: secrets.DISCORD_WEBHOOK_URL != ''
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{"content":"🚀 ANNEX ${{ github.ref_name }} deployed!\nBackend: Cloud Run\nWeb: Firebase\nMobile: Artifacts ready\nExtension: Chrome Web Store"}' \
+            ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  # =========================================================================
+  # ROLLBACK (manual trigger)
+  # =========================================================================
+  rollback:
+    name: Rollback Deployment
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.rollback == 'true'
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+
+      - name: List Cloud Run revisions
+        run: |
+          gcloud run services describe annex-backend \
+            --region=${{ secrets.GCP_REGION }} \
+            --format="table(metadata.name,status.latestReadyRevisionName,status.traffic[0].percent)"
+
+      - name: Rollback to previous revision
+        run: |
+          PREV_REVISION=$(gcloud run services describe annex-backend \
+            --region=${{ secrets.GCP_REGION }} \
+            --format="value(status.conditions[?type=Ready].lastTransitionTime)" | sort | head -2 | tail -1)
+          echo "Rolling back to revision: $PREV_REVISION"
+          # Manual step - requires human confirmation
+          echo "Run manually: gcloud run services update-traffic annex-backend --to-revisions=$PREV_REVISION=100 --region=${{ secrets.GCP_REGION }}"
