@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from uuid import uuid4
 
 from app.core.entities.analysis import Analysis, AnalysisStatus, Assessment, Claim
 from app.core.entities.media import Media
@@ -69,7 +70,14 @@ class FakeAnalysisRepository(AnalysisRepository):
             )
         if update.claims is not None:
             analysis.claims = [
-                Claim(text=claim["text"], position=int(claim["position"])) for claim in update.claims
+                Claim(
+                    id=uuid4().hex,
+                    analysis_id=analysis.id,
+                    owner_id=analysis.owner_id,
+                    text=claim["text"],
+                    position=int(claim["position"]),
+                )
+                for claim in update.claims
             ]
 
 

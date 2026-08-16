@@ -56,7 +56,14 @@ def _analysis_from_row(row: dict, claims: list[dict] | None = None) -> Analysis:
             reasoning=row.get("reasoning") or "",
         )
     claim_objects = [
-        Claim(text=claim["text"], position=int(claim.get("position") or 0))
+        Claim(
+            id=claim["id"],
+            analysis_id=claim["analysis_id"],
+            owner_id=claim["owner_id"],
+            text=claim["text"],
+            position=int(claim.get("position") or 0),
+            created_at=_parse_datetime(claim.get("created_at")),
+        )
         for claim in (claims or [])
     ]
     return Analysis(
@@ -201,7 +208,7 @@ class SupabaseAnalysisRepository(AnalysisRepository):
         result = await asyncio.to_thread(
             lambda: (
                 self._client.table("claims")
-                .select("id, analysis_id, text, position")
+                .select("id, analysis_id, owner_id, text, position, created_at")
                 .eq("analysis_id", analysis_id)
                 .order("position")
                 .execute()
@@ -210,13 +217,28 @@ class SupabaseAnalysisRepository(AnalysisRepository):
         return result.data
 
     async def _replace_claims(self, analysis_id: str, claims: list[dict]) -> None:
+        owner = await asyncio.to_thread(
+            lambda: (
+                self._client.table("analysis")
+                .select("owner_id")
+                .eq("id", analysis_id)
+                .maybe_single()
+                .execute()
+            )
+        )
+        owner_id = owner.data["owner_id"] if owner.data else None
         await asyncio.to_thread(
             lambda: self._client.table("claims").delete().eq("analysis_id", analysis_id).execute()
         )
         if not claims:
             return
         rows = [
-            {"analysis_id": analysis_id, "text": claim["text"], "position": claim["position"]}
+            {
+                "analysis_id": analysis_id,
+                "owner_id": owner_id,
+                "text": claim["text"],
+                "position": claim["position"],
+            }
             for claim in claims
         ]
         await asyncio.to_thread(lambda: self._client.table("claims").insert(rows).execute())

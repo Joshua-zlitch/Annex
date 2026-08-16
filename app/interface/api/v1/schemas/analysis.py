@@ -6,8 +6,12 @@ from pydantic import BaseModel, ConfigDict
 class ClaimOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    id: str
+    analysis_id: str
+    owner_id: str
     text: str
     position: int
+    created_at: datetime
 
 
 class AssessmentOut(BaseModel):

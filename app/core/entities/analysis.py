@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from uuid import uuid4
 
 from app.core.entities.media import utcnow
 
@@ -22,6 +23,10 @@ class Claim:
 
     text: str
     position: int = 0
+    id: str = field(default_factory=lambda: uuid4().hex)
+    analysis_id: str | None = None
+    owner_id: str | None = None
+    created_at: datetime = field(default_factory=utcnow)
 
 
 @dataclass(slots=True)
