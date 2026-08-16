@@ -62,6 +62,12 @@ class AnalyzeMediaUseCase:
                     completed_at=utcnow().isoformat(),
                 ),
             )
+        except UnsupportedMediaTypeError as exc:
+            # Unsupported media types are a known, expected outcome: record the
+            # failure and let the pipeline finish without propagating.
+            await self._analysis_repository.update(
+                analysis_id, AnalysisUpdate(status=AnalysisStatus.FAILED.value, error=str(exc))
+            )
         except Exception as exc:  # noqa: BLE001 - pipeline must never crash the request
             await self._analysis_repository.update(
                 analysis_id, AnalysisUpdate(status=AnalysisStatus.FAILED.value, error=str(exc))

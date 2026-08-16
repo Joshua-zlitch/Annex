@@ -1,13 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import random
+from collections.abc import Awaitable, Callable
 
-from openai import APIError, AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
 
 from app.core.exceptions import ExternalServiceError
 from app.core.ports.ai_provider import AIProvider, AnalysisResult
 from app.infrastructure.config import Settings
+
+_TRANSIENT_ERRORS = (
+    APITimeoutError,
+    APIConnectionError,
+    RateLimitError,
+    InternalServerError,
+)
 
 _OCR_SYSTEM_PROMPT = (
     "You are an OCR engine specialised in extracting text from images with high accuracy. "
@@ -33,14 +50,36 @@ class OpenAIProvider(AIProvider):
     """OpenAI-backed AI provider using vision (gpt-4o) for OCR and JSON output for analysis."""
 
     def __init__(self, settings: Settings):
-        self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self._client = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.openai_timeout_seconds,
+            max_retries=settings.openai_max_retries,
+        )
         self._ocr_model = settings.openai_ocr_model
         self._analysis_model = settings.openai_analysis_model
+        self._max_retries = settings.openai_max_retries
+
+    async def _with_retries(self, operation: str, call: Callable[[], Awaitable[object]]) -> object:
+        """Run an OpenAI call, retrying transient failures with exponential backoff + jitter."""
+        for attempt in range(self._max_retries + 1):
+            try:
+                return await call()
+            except _TRANSIENT_ERRORS as exc:
+                if attempt >= self._max_retries:
+                    raise ExternalServiceError(
+                        f"{operation} failed after {self._max_retries + 1} attempts: {exc}"
+                    ) from exc
+                delay = min(2**attempt, 8) + random.uniform(0, 1)
+                await asyncio.sleep(delay)
+            except APIError as exc:
+                raise ExternalServiceError(f"{operation} failed: {exc}") from exc
+        raise AssertionError("unreachable")
 
     async def extract_text_from_image(self, image_bytes: bytes, mime_type: str) -> str:
         data_url = f"data:{mime_type};base64,{base64.b64encode(image_bytes).decode()}"
-        try:
-            response = await self._client.chat.completions.create(
+        response = await self._with_retries(
+            "OCR request",
+            lambda: self._client.chat.completions.create(
                 model=self._ocr_model,
                 messages=[
                     {"role": "system", "content": _OCR_SYSTEM_PROMPT},
@@ -53,15 +92,15 @@ class OpenAIProvider(AIProvider):
                     },
                 ],
                 max_tokens=4096,
-            )
-        except APIError as exc:
-            raise ExternalServiceError(f"OCR request failed: {exc}") from exc
+            ),
+        )
         return (response.choices[0].message.content or "").strip()
 
     async def analyze_content(self, content: str) -> AnalysisResult:
         user_prompt = f"Transcribed content to analyse:\n\n{content[:15000]}"
-        try:
-            response = await self._client.chat.completions.create(
+        response = await self._with_retries(
+            "Analysis request",
+            lambda: self._client.chat.completions.create(
                 model=self._analysis_model,
                 response_format={"type": "json_object"},
                 messages=[
@@ -69,9 +108,8 @@ class OpenAIProvider(AIProvider):
                     {"role": "user", "content": user_prompt},
                 ],
                 max_tokens=2048,
-            )
-        except APIError as exc:
-            raise ExternalServiceError(f"Analysis request failed: {exc}") from exc
+            ),
+        )
 
         raw = (response.choices[0].message.content or "{}").strip()
         try:

@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_ocr_model: str = "gpt-4o-mini"
     openai_analysis_model: str = "gpt-4o-mini"
+    openai_timeout_seconds: float = 60.0
+    openai_max_retries: int = 3
 
     @property
     def max_upload_size_bytes(self) -> int:
